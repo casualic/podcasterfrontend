@@ -15,10 +15,13 @@ export default function PlayerScreen() {
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [sliderValue, setSliderValue] = useState(0);
   const { getPodcast } = useStorage();
   
   const progressAnimation = useRef(new Animated.Value(0)).current;
   const discAnimation = useRef(new Animated.Value(0)).current;
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const statusUpdateInterval = useRef<NodeJS.Timeout | null>(null);
   
   useEffect(() => {
     if (id) {
@@ -26,11 +29,28 @@ export default function PlayerScreen() {
     }
     
     return () => {
-      if (sound) {
-        sound.unloadAsync();
+      if (soundRef.current) {
+        soundRef.current.unloadAsync();
+      }
+      if (statusUpdateInterval.current) {
+        clearInterval(statusUpdateInterval.current);
       }
     };
   }, [id]);
+  
+  const startPlaybackStatusUpdate = () => {
+    if (soundRef.current) {
+      // For web compatibility, use an interval to update the status
+      statusUpdateInterval.current = setInterval(async () => {
+        if (soundRef.current) {
+          const status = await soundRef.current.getStatusAsync();
+          if (status.isLoaded) {
+            onPlaybackStatusUpdate(status);
+          }
+        }
+      }, 100);
+    }
+  };
   
   useEffect(() => {
     if (sound && podcast) {
@@ -38,15 +58,14 @@ export default function PlayerScreen() {
     }
     
     return () => {
-      if (sound) {
-        sound.setOnPlaybackStatusUpdate(null);
+      if (statusUpdateInterval.current) {
+        clearInterval(statusUpdateInterval.current);
       }
     };
   }, [sound, podcast]);
   
   useEffect(() => {
-    // Animate the spinning disc when playing
-    let discRotation: any;
+    let discRotation: Animated.CompositeAnimation | null = null;
     
     if (isPlaying) {
       discRotation = Animated.loop(
@@ -58,7 +77,7 @@ export default function PlayerScreen() {
       );
       discRotation.start();
     } else {
-      discAnimation.stopAnimation();
+      discAnimation.setValue(0);
     }
     
     return () => {
@@ -85,8 +104,8 @@ export default function PlayerScreen() {
   
   const loadAudio = async (audioUrl: string) => {
     try {
-      if (sound) {
-        await sound.unloadAsync();
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
       }
       
       const { sound: newSound } = await Audio.Sound.createAsync(
@@ -95,7 +114,14 @@ export default function PlayerScreen() {
         onPlaybackStatusUpdate
       );
       
+      soundRef.current = newSound;
       setSound(newSound);
+      
+      // Get initial status
+      const status = await newSound.getStatusAsync();
+      if (status.isLoaded) {
+        setDuration(status.durationMillis || 0);
+      }
     } catch (error) {
       console.error('Error loading audio:', error);
     }
@@ -106,47 +132,57 @@ export default function PlayerScreen() {
       setPosition(status.positionMillis);
       setDuration(status.durationMillis || 0);
       setIsPlaying(status.isPlaying);
-      
-      // Update the progress animation
+      setSliderValue(status.positionMillis / (status.durationMillis || 1));
       progressAnimation.setValue(status.positionMillis / (status.durationMillis || 1));
     }
   };
   
-  const startPlaybackStatusUpdate = () => {
-    if (sound) {
-      sound.setOnPlaybackStatusUpdate(onPlaybackStatusUpdate);
-    }
-  };
-  
   const handlePlayPause = async () => {
-    if (!sound) return;
+    if (!soundRef.current) return;
     
-    if (isPlaying) {
-      await sound.pauseAsync();
-    } else {
-      await sound.playAsync();
+    try {
+      if (isPlaying) {
+        await soundRef.current.pauseAsync();
+      } else {
+        await soundRef.current.playAsync();
+      }
+    } catch (error) {
+      console.error('Error toggling playback:', error);
     }
   };
   
   const handleSkipForward = async () => {
-    if (!sound) return;
+    if (!soundRef.current) return;
     
-    const newPosition = Math.min(position + 15000, duration);
-    await sound.setPositionAsync(newPosition);
+    try {
+      const newPosition = Math.min(position + 15000, duration);
+      await soundRef.current.setPositionAsync(newPosition);
+    } catch (error) {
+      console.error('Error skipping forward:', error);
+    }
   };
   
   const handleSkipBackward = async () => {
-    if (!sound) return;
+    if (!soundRef.current) return;
     
-    const newPosition = Math.max(position - 15000, 0);
-    await sound.setPositionAsync(newPosition);
+    try {
+      const newPosition = Math.max(position - 15000, 0);
+      await soundRef.current.setPositionAsync(newPosition);
+    } catch (error) {
+      console.error('Error skipping backward:', error);
+    }
   };
   
   const handleSliderChange = async (value: number) => {
-    if (!sound) return;
+    if (!soundRef.current || !duration) return;
     
-    const newPosition = value * duration;
-    await sound.setPositionAsync(newPosition);
+    try {
+      const newPosition = value * duration;
+      setPosition(newPosition);
+      await soundRef.current.setPositionAsync(newPosition);
+    } catch (error) {
+      console.error('Error seeking:', error);
+    }
   };
 
   const spin = discAnimation.interpolate({
@@ -198,7 +234,7 @@ export default function PlayerScreen() {
           style={styles.progressBar}
           minimumValue={0}
           maximumValue={1}
-          value={duration > 0 ? position / duration : 0}
+          value={sliderValue}
           onValueChange={handleSliderChange}
           minimumTrackTintColor="#3B82F6"
           maximumTrackTintColor="#4B5563"
