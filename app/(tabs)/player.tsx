@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Animated } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { Audio } from 'expo-av';
 import { Play, Pause, SkipBack, SkipForward, Volume2 } from 'lucide-react-native';
 import { useStorage } from '@/hooks/useStorage';
 import { formatTime } from '@/utils/timeFormatter';
@@ -9,19 +8,17 @@ import Slider from '@react-native-community/slider';
 
 export default function PlayerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [podcast, setPodcast] = useState<any | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [sliderValue, setSliderValue] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const { getPodcast } = useStorage();
   
-  const progressAnimation = useRef(new Animated.Value(0)).current;
-  const discAnimation = useRef(new Animated.Value(0)).current;
-  const soundRef = useRef<Audio.Sound | null>(null);
-  const statusUpdateInterval = useRef<NodeJS.Timeout | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const errorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   useEffect(() => {
     if (id) {
@@ -29,63 +26,74 @@ export default function PlayerScreen() {
     }
     
     return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync();
-      }
-      if (statusUpdateInterval.current) {
-        clearInterval(statusUpdateInterval.current);
-      }
+      cleanupResources();
     };
   }, [id]);
-  
-  const startPlaybackStatusUpdate = () => {
-    if (soundRef.current) {
-      // For web compatibility, use an interval to update the status
-      statusUpdateInterval.current = setInterval(async () => {
-        if (soundRef.current) {
-          const status = await soundRef.current.getStatusAsync();
-          if (status.isLoaded) {
-            onPlaybackStatusUpdate(status);
-          }
-        }
-      }, 100);
+
+  useEffect(() => {
+    cleanupResources();
+    
+    if (typeof window !== 'undefined' && podcast?.audioUrl) {
+      const audio = new Audio(podcast.audioUrl);
+      audioRef.current = audio;
+      
+      audio.addEventListener('loadedmetadata', () => {
+        setDuration(audio.duration * 1000);
+        setIsLoading(false);
+      });
+      
+      audio.addEventListener('timeupdate', () => {
+        setPosition(audio.currentTime * 1000);
+        setSliderValue(audio.currentTime / audio.duration);
+      });
+      
+      audio.addEventListener('ended', () => {
+        setIsPlaying(false);
+        setPosition(0);
+        setSliderValue(0);
+      });
+      
+      audio.addEventListener('error', () => {
+        showError('Error playing audio');
+      });
+      
+      return () => {
+        audio.removeEventListener('loadedmetadata', () => {});
+        audio.removeEventListener('timeupdate', () => {});
+        audio.removeEventListener('ended', () => {});
+        audio.removeEventListener('error', () => {});
+        audio.pause();
+        audio.src = '';
+      };
     }
+  }, [podcast?.audioUrl]);
+
+  const cleanupResources = () => {
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+    
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+      audioRef.current = null;
+    }
+    
+    setIsPlaying(false);
+    setPosition(0);
+    setSliderValue(0);
   };
   
-  useEffect(() => {
-    if (sound && podcast) {
-      startPlaybackStatusUpdate();
+  const showError = (message: string) => {
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
     }
-    
-    return () => {
-      if (statusUpdateInterval.current) {
-        clearInterval(statusUpdateInterval.current);
-      }
-    };
-  }, [sound, podcast]);
-  
-  useEffect(() => {
-    let discRotation: Animated.CompositeAnimation | null = null;
-    
-    if (isPlaying) {
-      discRotation = Animated.loop(
-        Animated.timing(discAnimation, {
-          toValue: 1,
-          duration: 5000,
-          useNativeDriver: true
-        })
-      );
-      discRotation.start();
-    } else {
-      discAnimation.setValue(0);
-    }
-    
-    return () => {
-      if (discRotation) {
-        discRotation.stop();
-      }
-    };
-  }, [isPlaying]);
+    setErrorMessage(message);
+    errorTimeoutRef.current = setTimeout(() => {
+      setErrorMessage(null);
+    }, 3000);
+  };
   
   const loadPodcast = async () => {
     try {
@@ -93,102 +101,60 @@ export default function PlayerScreen() {
       const podcastData = await getPodcast(id as string);
       if (podcastData) {
         setPodcast(podcastData);
-        await loadAudio(podcastData.audioUrl);
       }
     } catch (error) {
-      console.error('Error loading podcast:', error);
-    } finally {
-      setIsLoading(false);
+      showError('Error loading podcast');
     }
   };
   
-  const loadAudio = async (audioUrl: string) => {
-    try {
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-      }
-      
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri: audioUrl },
-        { shouldPlay: false },
-        onPlaybackStatusUpdate
-      );
-      
-      soundRef.current = newSound;
-      setSound(newSound);
-      
-      // Get initial status
-      const status = await newSound.getStatusAsync();
-      if (status.isLoaded) {
-        setDuration(status.durationMillis || 0);
-      }
-    } catch (error) {
-      console.error('Error loading audio:', error);
-    }
-  };
-  
-  const onPlaybackStatusUpdate = (status: any) => {
-    if (status.isLoaded) {
-      setPosition(status.positionMillis);
-      setDuration(status.durationMillis || 0);
-      setIsPlaying(status.isPlaying);
-      setSliderValue(status.positionMillis / (status.durationMillis || 1));
-      progressAnimation.setValue(status.positionMillis / (status.durationMillis || 1));
-    }
-  };
-  
-  const handlePlayPause = async () => {
-    if (!soundRef.current) return;
+  const handlePlayPause = () => {
+    if (!audioRef.current) return;
     
     try {
       if (isPlaying) {
-        await soundRef.current.pauseAsync();
+        audioRef.current.pause();
       } else {
-        await soundRef.current.playAsync();
+        audioRef.current.play();
       }
+      setIsPlaying(!isPlaying);
     } catch (error) {
-      console.error('Error toggling playback:', error);
+      showError('Playback control error');
     }
   };
   
-  const handleSkipForward = async () => {
-    if (!soundRef.current) return;
+  const handleSkipForward = () => {
+    if (!audioRef.current) return;
     
     try {
-      const newPosition = Math.min(position + 15000, duration);
-      await soundRef.current.setPositionAsync(newPosition);
+      const newTime = Math.min(audioRef.current.currentTime + 15, audioRef.current.duration);
+      audioRef.current.currentTime = newTime;
     } catch (error) {
-      console.error('Error skipping forward:', error);
+      showError('Skip forward error');
     }
   };
   
-  const handleSkipBackward = async () => {
-    if (!soundRef.current) return;
+  const handleSkipBackward = () => {
+    if (!audioRef.current) return;
     
     try {
-      const newPosition = Math.max(position - 15000, 0);
-      await soundRef.current.setPositionAsync(newPosition);
+      const newTime = Math.max(audioRef.current.currentTime - 15, 0);
+      audioRef.current.currentTime = newTime;
     } catch (error) {
-      console.error('Error skipping backward:', error);
+      showError('Skip backward error');
     }
   };
   
-  const handleSliderChange = async (value: number) => {
-    if (!soundRef.current || !duration) return;
+  const handleSliderChange = (value: number) => {
+    if (!audioRef.current || !duration) return;
     
     try {
-      const newPosition = value * duration;
-      setPosition(newPosition);
-      await soundRef.current.setPositionAsync(newPosition);
+      const newTime = value * audioRef.current.duration;
+      audioRef.current.currentTime = newTime;
+      setPosition(newTime * 1000);
     } catch (error) {
-      console.error('Error seeking:', error);
+      showError('Slider control error');
     }
   };
-
-  const spin = discAnimation.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg']
-  });
   
   if (isLoading) {
     return (
@@ -208,68 +174,68 @@ export default function PlayerScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.albumArtContainer}>
-        <Animated.View 
-          style={[
-            styles.discContainer, 
-            { transform: [{ rotate: spin }] }
-          ]}
-        >
+      {errorMessage && (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{errorMessage}</Text>
+        </View>
+      )}
+      <View style={styles.contentContainer}>
+        <View style={styles.imageContainer}>
           <Image
             source={{ uri: 'https://images.pexels.com/photos/2098913/pexels-photo-2098913.jpeg' }}
             style={styles.albumArt}
           />
-        </Animated.View>
-      </View>
-      
-      <View style={styles.infoContainer}>
-        <Text style={styles.podcastTitle} numberOfLines={2}>
-          {podcast.title}
-        </Text>
-        <Text style={styles.podcastCreator}>AI Generated Podcast</Text>
-      </View>
-      
-      <View style={styles.progressContainer}>
-        <Slider
-          style={styles.progressBar}
-          minimumValue={0}
-          maximumValue={1}
-          value={sliderValue}
-          onValueChange={handleSliderChange}
-          minimumTrackTintColor="#3B82F6"
-          maximumTrackTintColor="#4B5563"
-          thumbTintColor="#3B82F6"
-        />
-        <View style={styles.timeContainer}>
-          <Text style={styles.timeText}>{formatTime(position)}</Text>
-          <Text style={styles.timeText}>{formatTime(duration)}</Text>
         </View>
-      </View>
-      
-      <View style={styles.controlsContainer}>
-        <TouchableOpacity onPress={handleSkipBackward} style={styles.controlButton}>
-          <SkipBack size={24} color="#FFFFFF" />
-          <Text style={styles.skipText}>15s</Text>
-        </TouchableOpacity>
         
-        <TouchableOpacity onPress={handlePlayPause} style={styles.playButton}>
-          {isPlaying ? (
-            <Pause size={32} color="#FFFFFF" />
-          ) : (
-            <Play size={32} color="#FFFFFF" />
-          )}
-        </TouchableOpacity>
+        <View style={styles.infoContainer}>
+          <Text style={styles.podcastTitle} numberOfLines={2}>
+            {podcast.title}
+          </Text>
+          <Text style={styles.podcastCreator}>AI Generated Podcast</Text>
+        </View>
         
-        <TouchableOpacity onPress={handleSkipForward} style={styles.controlButton}>
-          <SkipForward size={24} color="#FFFFFF" />
-          <Text style={styles.skipText}>15s</Text>
-        </TouchableOpacity>
-      </View>
-      
-      <View style={styles.metadataContainer}>
-        <View style={styles.metadataRow}>
-          <Volume2 size={18} color="#9CA3AF" />
-          <Text style={styles.metadataText}>AI Generated Voice</Text>
+        <View style={styles.progressContainer}>
+          <Slider
+            style={styles.progressBar}
+            minimumValue={0}
+            maximumValue={1}
+            value={sliderValue}
+            onValueChange={handleSliderChange}
+            minimumTrackTintColor="#3B82F6"
+            maximumTrackTintColor="#4B5563"
+            thumbTintColor="#3B82F6"
+          />
+          <View style={styles.timeContainer}>
+            <Text style={styles.timeText}>{formatTime(position)}</Text>
+            <Text style={styles.timeText}>{formatTime(duration)}</Text>
+          </View>
+        </View>
+        
+        <View style={styles.controlsContainer}>
+          <TouchableOpacity onPress={handleSkipBackward} style={styles.controlButton}>
+            <SkipBack size={24} color="#FFFFFF" />
+            <Text style={styles.skipText}>15s</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity onPress={handlePlayPause} style={styles.playButton}>
+            {isPlaying ? (
+              <Pause size={32} color="#FFFFFF" />
+            ) : (
+              <Play size={32} color="#FFFFFF" />
+            )}
+          </TouchableOpacity>
+          
+          <TouchableOpacity onPress={handleSkipForward} style={styles.controlButton}>
+            <SkipForward size={24} color="#FFFFFF" />
+            <Text style={styles.skipText}>15s</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <View style={styles.metadataContainer}>
+          <View style={styles.metadataRow}>
+            <Volume2 size={18} color="#9CA3AF" />
+            <Text style={styles.metadataText}>AI Generated Voice</Text>
+          </View>
         </View>
       </View>
     </View>
@@ -280,6 +246,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#121212',
+  },
+  contentContainer: {
+    flex: 1,
     padding: 20,
     justifyContent: 'center',
   },
@@ -291,28 +260,28 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
   },
-  errorText: {
-    color: '#EF4444',
-    fontSize: 16,
+  errorContainer: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    right: 20,
+    backgroundColor: '#EF4444',
+    padding: 10,
+    borderRadius: 8,
+    zIndex: 1000,
   },
-  albumArtContainer: {
+  errorText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  imageContainer: {
     alignItems: 'center',
     marginBottom: 40,
   },
-  discContainer: {
+  albumArt: {
     width: 240,
     height: 240,
-    borderRadius: 120,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 10,
-  },
-  albumArt: {
-    width: '100%',
-    height: '100%',
     borderRadius: 120,
   },
   infoContainer: {

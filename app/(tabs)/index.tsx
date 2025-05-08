@@ -7,7 +7,7 @@ import { formatDate } from '@/utils/dateFormatter';
 
 export default function GenerateScreen() {
   const [prompt, setPrompt] = useState('');
-  const [duration, setDuration] = useState('5');
+  const [duration, setDuration] = useState('1');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { savePodcast } = useStorage();

@@ -39,7 +39,11 @@ export const useStorage = () => {
   const getAllPodcasts = async (): Promise<Podcast[]> => {
     try {
       const podcastsJson = await AsyncStorage.getItem(PODCASTS_KEY);
-      return podcastsJson ? JSON.parse(podcastsJson) : [];
+      const podcasts = podcastsJson ? JSON.parse(podcastsJson) : [];
+      // Sort podcasts by creation date, newest first
+      return podcasts.sort((a: Podcast, b: Podcast) => 
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
     } catch (error) {
       console.error('Error getting podcasts:', error);
       return [];
@@ -50,7 +54,12 @@ export const useStorage = () => {
   const getPodcast = async (id: string): Promise<Podcast | null> => {
     try {
       const podcasts = await getAllPodcasts();
-      return podcasts.find(podcast => podcast.id === id) || null;
+      const podcast = podcasts.find(p => p.id === id);
+      if (!podcast) {
+        console.error('Podcast not found:', id);
+        return null;
+      }
+      return podcast;
     } catch (error) {
       console.error('Error getting podcast:', error);
       return null;
