@@ -19,6 +19,7 @@ export default function PlayerScreen() {
   
   const progressAnimation = useRef(new Animated.Value(0)).current;
   const discAnimation = useRef(new Animated.Value(0)).current;
+  const soundRef = useRef<Audio.Sound | null>(null);
   
   useEffect(() => {
     if (id) {
@@ -26,11 +27,17 @@ export default function PlayerScreen() {
     }
     
     return () => {
-      if (sound) {
-        sound.unloadAsync();
+      if (soundRef.current) {
+        soundRef.current.unloadAsync();
       }
     };
   }, [id]);
+  
+  const startPlaybackStatusUpdate = () => {
+    if (soundRef.current) {
+      soundRef.current.setOnPlaybackStatusUpdate(onPlaybackStatusUpdate);
+    }
+  };
   
   useEffect(() => {
     if (sound && podcast) {
@@ -38,15 +45,14 @@ export default function PlayerScreen() {
     }
     
     return () => {
-      if (sound) {
-        sound.setOnPlaybackStatusUpdate(null);
+      if (soundRef.current) {
+        soundRef.current.setOnPlaybackStatusUpdate(null);
       }
     };
   }, [sound, podcast]);
   
   useEffect(() => {
-    // Animate the spinning disc when playing
-    let discRotation: any;
+    let discRotation: Animated.CompositeAnimation | null = null;
     
     if (isPlaying) {
       discRotation = Animated.loop(
@@ -58,7 +64,7 @@ export default function PlayerScreen() {
       );
       discRotation.start();
     } else {
-      discAnimation.stopAnimation();
+      discAnimation.setValue(0);
     }
     
     return () => {
@@ -85,8 +91,8 @@ export default function PlayerScreen() {
   
   const loadAudio = async (audioUrl: string) => {
     try {
-      if (sound) {
-        await sound.unloadAsync();
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
       }
       
       const { sound: newSound } = await Audio.Sound.createAsync(
@@ -95,6 +101,7 @@ export default function PlayerScreen() {
         onPlaybackStatusUpdate
       );
       
+      soundRef.current = newSound;
       setSound(newSound);
     } catch (error) {
       console.error('Error loading audio:', error);
@@ -107,46 +114,55 @@ export default function PlayerScreen() {
       setDuration(status.durationMillis || 0);
       setIsPlaying(status.isPlaying);
       
-      // Update the progress animation
       progressAnimation.setValue(status.positionMillis / (status.durationMillis || 1));
     }
   };
   
-  const startPlaybackStatusUpdate = () => {
-    if (sound) {
-      sound.setOnPlaybackStatusUpdate(onPlaybackStatusUpdate);
-    }
-  };
-  
   const handlePlayPause = async () => {
-    if (!sound) return;
+    if (!soundRef.current) return;
     
-    if (isPlaying) {
-      await sound.pauseAsync();
-    } else {
-      await sound.playAsync();
+    try {
+      if (isPlaying) {
+        await soundRef.current.pauseAsync();
+      } else {
+        await soundRef.current.playAsync();
+      }
+    } catch (error) {
+      console.error('Error toggling playback:', error);
     }
   };
   
   const handleSkipForward = async () => {
-    if (!sound) return;
+    if (!soundRef.current) return;
     
-    const newPosition = Math.min(position + 15000, duration);
-    await sound.setPositionAsync(newPosition);
+    try {
+      const newPosition = Math.min(position + 15000, duration);
+      await soundRef.current.setPositionAsync(newPosition);
+    } catch (error) {
+      console.error('Error skipping forward:', error);
+    }
   };
   
   const handleSkipBackward = async () => {
-    if (!sound) return;
+    if (!soundRef.current) return;
     
-    const newPosition = Math.max(position - 15000, 0);
-    await sound.setPositionAsync(newPosition);
+    try {
+      const newPosition = Math.max(position - 15000, 0);
+      await soundRef.current.setPositionAsync(newPosition);
+    } catch (error) {
+      console.error('Error skipping backward:', error);
+    }
   };
   
   const handleSliderChange = async (value: number) => {
-    if (!sound) return;
+    if (!soundRef.current) return;
     
-    const newPosition = value * duration;
-    await sound.setPositionAsync(newPosition);
+    try {
+      const newPosition = value * duration;
+      await soundRef.current.setPositionAsync(newPosition);
+    } catch (error) {
+      console.error('Error seeking:', error);
+    }
   };
 
   const spin = discAnimation.interpolate({
