@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://e29a-2600-1700-428-5030-8166-3acf-b7fb-8db4.ngrok-free.app';
+const API_BASE_URL = 'https://a593-70-166-84-166.ngrok-free.app';
 
 export class PodcastApi {
   /**

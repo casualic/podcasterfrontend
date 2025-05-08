@@ -69,7 +69,7 @@ export default function GenerateScreen() {
         <Text style={styles.label}>Duration (minutes)</Text>
         <TextInput
           style={[styles.input, styles.durationInput]}
-          placeholder="5"
+          placeholder="1"
           placeholderTextColor="#6B7280"
           value={duration}
           onChangeText={setDuration}
